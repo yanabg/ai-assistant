@@ -1,0 +1,20 @@
+# Environment / secrets
+.env
+
+# uv / virtualenv
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Local store - see chatapp_data_dir
+data/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
