@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncGenerator, Callable, Sequence
+from typing import List
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -21,21 +22,40 @@ from chatapp.messages import Message
 __all__ = ["AIClient"]
 
 
+
+class AttributeDefinition(BaseModel):
+    name: str
+    type: str
+    description: str
+
+
+class AttributeAssignment(BaseModel):
+    name: str
+    value: str | int
+
 class GetHierarchiesArgs(BaseModel):
     pass
+
+
+
+class CreateHierarchyArgs(BaseModel):
+    name: str
+    description: str
+    additional_attributes: List[AttributeDefinition]
 
 
 class GetEntriesArgs(BaseModel):
     hierarchy: str
 
 
+class CreateEntryArgs(BaseModel):
+    hierarchy: str
+    name: str
+    attributes: List[AttributeAssignment]
+
+
 # Build the handlers:
 def get_hierarchies(raw_args: str, config: AIClientConfig) -> str:
-    """List every hierarchy (a directory under ``data_dir``) with its schema.
-
-    Returns a JSON array of ``{"name", "description"}``, where the description
-    is the text of the hierarchy's ``SCHEMA.md`` (empty if absent).
-    """
     GetHierarchiesArgs.model_validate_json(raw_args or "{}")
 
     hierarchies: list[dict[str, str]] = []
@@ -50,13 +70,11 @@ def get_hierarchies(raw_args: str, config: AIClientConfig) -> str:
 
     return json.dumps(hierarchies)
 
+def create_hierarchy(raw_args: str, config: AIClientConfig) -> str:
+    pass
+
 
 def get_entries(raw_args: str, config: AIClientConfig) -> str:
-    """List the entries of a single hierarchy by name.
-
-    Returns a JSON array of ``{"name"}`` — one per ``*.md`` entry file in
-    ``data_dir/<hierarchy>``, excluding the ``SCHEMA.md`` schema file.
-    """
     args = GetEntriesArgs.model_validate_json(raw_args or "{}")
 
     entries: list[dict[str, str]] = []
@@ -67,6 +85,10 @@ def get_entries(raw_args: str, config: AIClientConfig) -> str:
                 entries.append({"name": child.stem})
 
     return json.dumps(entries)
+
+
+def create_entry(raw_args: str, config: AIClientConfig) -> str:
+    pass
 
 
 def _extract_tool_calls(response: Any) -> list[Any]:
@@ -85,12 +107,22 @@ TOOLS_REGISTER: dict[str, _Tool] = {
     "get_hierarchies": _Tool(
         description="Use this tool to retrieve all hierarchies.",
         args_type=GetHierarchiesArgs,
-        handler=get_hierarchies,
+        handler=get_hierarchies
+    ),
+    "create_hierarchy" : _Tool(
+        description="Call this tool to create a new hierarchy.",
+        args_type=CreateHierarchyArgs,
+        handler=create_hierarchy
     ),
     "get_entries": _Tool(
         description="Use this tool to retrieve all entries in a given hierarchy.",
         args_type=GetEntriesArgs,
-        handler=get_entries,
+        handler=get_entries
+    ),
+    "create_entry": _Tool(
+        description="Call this tool to create a new entry within a given hierarchy.",
+        args_type=CreateEntryArgs,
+        handler=create_entry
     ),
 }
 
