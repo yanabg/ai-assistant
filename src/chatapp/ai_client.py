@@ -6,6 +6,7 @@ the backend author.
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncGenerator, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +15,7 @@ from typing import Any, Protocol
 from openai import OpenAI
 from pydantic import BaseModel, SecretStr
 
-from chatapp.events import AIEvent, TextDelta
+from chatapp.events import AIEvent, TextDelta, ToolCall, ToolResult
 from chatapp.messages import Message
 
 __all__ = ["AIClient"]
@@ -28,27 +29,68 @@ class GetEntriesArgs(BaseModel):
     hierarchy: str
 
 
+# Build the handlers:
+def get_hierarchies(raw_args: str, config: AIClientConfig) -> str:
+    """List every hierarchy (a directory under ``data_dir``) with its schema.
+
+    Returns a JSON array of ``{"name", "description"}``, where the description
+    is the text of the hierarchy's ``SCHEMA.md`` (empty if absent).
+    """
+    GetHierarchiesArgs.model_validate_json(raw_args or "{}")
+
+    hierarchies: list[dict[str, str]] = []
+    data_dir = config.data_dir
+    if data_dir.is_dir():
+        for child in sorted(data_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            schema = child / "SCHEMA.md"
+            description = schema.read_text(encoding="utf-8").strip() if schema.is_file() else ""
+            hierarchies.append({"name": child.name, "description": description})
+
+    return json.dumps(hierarchies)
+
+
+def get_entries(raw_args: str, config: AIClientConfig) -> str:
+    """List the entries of a single hierarchy by name.
+
+    Returns a JSON array of ``{"name"}`` — one per ``*.md`` entry file in
+    ``data_dir/<hierarchy>``, excluding the ``SCHEMA.md`` schema file.
+    """
+    args = GetEntriesArgs.model_validate_json(raw_args or "{}")
+
+    entries: list[dict[str, str]] = []
+    hierarchy_dir = config.data_dir / args.hierarchy
+    if hierarchy_dir.is_dir():
+        for child in sorted(hierarchy_dir.iterdir()):
+            if child.is_file() and child.suffix == ".md" and child.name != "SCHEMA.md":
+                entries.append({"name": child.stem})
+
+    return json.dumps(entries)
+
+
+def _extract_tool_calls(response: Any) -> list[Any]:
+    return [x for x in response.output if x.type == "function_call"]
+
 @dataclass(frozen=True)
 class _Tool:
     """A registered tool with its description, arguments model, and handler."""
 
     description: str
     args_type: type[BaseModel]
-    handler: Callable[..., object] | None
-
-# Build the handler:
+    handler: Callable[[str, AIClientConfig], str]
 
 
 TOOLS_REGISTER: dict[str, _Tool] = {
     "get_hierarchies": _Tool(
         description="Use this tool to retrieve all hierarchies.",
         args_type=GetHierarchiesArgs,
-        handler=None,
+        handler=get_hierarchies,
     ),
     "get_entries": _Tool(
         description="Use this tool to retrieve all entries in a given hierarchy.",
         args_type=GetEntriesArgs,
-        handler=None,
+        handler=get_entries,
     ),
 }
 
@@ -122,31 +164,70 @@ class AIClient:
         Yields:
             Events from :data:`~chatapp.events.AIEvent`.
         """
-        # Build menaingful history for th emdoel:
-        interaction_input: list[Any] = []
+        # Build meaningful history for the model.
+        context: list[Any] = []
 
-        interaction_input.append(
+        context.append(
             {
                 "role": "system",
-                "content": "You are a helpful personal assistant. Reply directly with text.",
+                "content": self._config.system_prompt,
+            }
+        )
+        context.extend({"role": item.role, "content": item.content} for item in history)
+        context.append(
+            {
+                "role": "user",
+                "content": user_message,
             }
         )
 
-        interaction_input.extend({"role": item.role, "content": item.content} for item in history)
-        interaction_input.append({"role": "user", "content": user_message})
-
-        # TODO: streaming!
         response = self._client.responses.create(
             model=self._config.model_name,
-            input=interaction_input,
-            # tool_choice="none"
+            input=context,
             tools=AI_TOOLS,
         )
+        tool_calls = _extract_tool_calls(response)
 
         print(response)
-        # yield TextDelta(text = response.output_text)
 
-        # print("OUTPUT TEXT:", repr(response.output_text))
-        # print("OUTPUT ITEMS:", response.output)
+        while tool_calls:
+            print(f"Discovered {len(tool_calls)} tool calls that should be executed.")
+            for tc in tool_calls:
+                print(tc)
+            print()
+
+            context.extend(response.output)
+
+            for tc in tool_calls:
+                yield ToolCall(
+                    name=tc.name,
+                    arguments=json.loads(tc.arguments),
+                )
+
+                handler = TOOLS_REGISTER[tc.name].handler
+                current_result = handler(tc.arguments, self._config)
+
+                yield ToolResult(
+                    name=tc.name,
+                    content=current_result,
+                    is_error=False,
+                )
+
+                context.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": tc.call_id,
+                        "output": current_result,
+                    }
+                )
+
+            response = self._client.responses.create(
+                model=self._config.model_name,
+                input=context,
+                tools=AI_TOOLS,
+            )
+            tool_calls = _extract_tool_calls(response)
+
+            print(response)
 
         yield TextDelta(text=response.output_text)

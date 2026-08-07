@@ -25,7 +25,6 @@ class ToolCall(BaseModel):
     """A request from the model to invoke a named tool."""
 
     type: Literal["tool_call"] = "tool_call"
-    call_id: str
     name: str
     arguments: Mapping[str, object] = Field(default_factory=dict)
 
@@ -34,7 +33,6 @@ class ToolResult(BaseModel):
     """The outcome of a previously announced :class:`ToolCall`."""
 
     type: Literal["tool_result"] = "tool_result"
-    call_id: str
     name: str
     content: str
     is_error: bool = False

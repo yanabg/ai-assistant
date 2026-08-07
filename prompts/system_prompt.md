@@ -43,7 +43,7 @@ Hierarchy-specific fields go alongside these and are defined in that hierarchy's
 
 ## Taxonomy
 
-We suggest these hierarchies.
+We suggest these hierarchies. Use them whenever you find them useful.
 
 - `people` — anyone recurring: family, friends, colleagues, contacts
 - `projects` — ongoing initiatives with an outcome: work, trips, courses, goals
