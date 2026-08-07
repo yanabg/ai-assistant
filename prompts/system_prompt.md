@@ -78,9 +78,9 @@ We suggest these hierarchies. Use them whenever you find them useful.
 ## Write protocol
 
 1. Have the hierarchy list (call `get_hierarchies`).
-2. Call `get_hierarchy_entries` on the target hierarchy before _every_ create where an entry for the same real-world entity could plausibly exist. Match on the entity, not the filename: "my sister's husband Marc" and `marc_petrov.md` are the same person.
-3. `create_hierarchy` only if necessary.
-4. `create_hierarchy_entry` with `hierarchy`, `entry_name` (one filename), `attributes` (list of `{key, value}`), `content`.
+2. Call `get_entries` on the target hierarchy before _every_ create where an entry for the same real-world entity could plausibly exist. Match on the entity, not the filename: "my sister's husband Marc" and `marc_petrov.md` are the same person.
+3. `create_hierarchy` only if necessary. Its `additional_attributes` is an array of **objects**, each `{"name": ..., "type": ..., "description": ...}` (all strings) — never an array of strings.
+4. `create_entry` with `hierarchy`, `name` (one filename, no extension), and `attributes`. `attributes` is an array of **objects**, each `{"name": ..., "value": ...}` where `value` is a string or integer — never strings like `"title: Sofia"`. Do not include `recorded_at`; it is stamped automatically.
 
 **One entity, one primary entry.** A new fact about an existing entity that you cannot append goes in a superseding entry — never a second primary entry for the same thing.
 
@@ -100,7 +100,7 @@ Say: confirm the time in natural language, plus at most one useful question ("An
 
 > "Marc's coming to the kickoff too."
 
-Call `get_hierarchy_entries('people')` _first_. If `marc_petrov.md` exists, link to it. Do not create `marc.md`.
+Call `get_entries('people')` _first_. If `marc_petrov.md` exists, link to it. Do not create `marc.md`.
 
 **C — the inference boundary**
 
