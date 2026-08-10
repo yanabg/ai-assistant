@@ -11,7 +11,7 @@ from collections.abc import AsyncGenerator, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol, Optional
+from typing import Any, Protocol
 
 from openai import OpenAI
 from pydantic import BaseModel, SecretStr
@@ -48,11 +48,16 @@ class GetEntriesArgs(BaseModel):
     hierarchy: str
 
 
+class GetEntryDetailsArgs(BaseModel):
+    hierarchy: str
+    entry_name: str
+
+
 class CreateEntryArgs(BaseModel):
     hierarchy: str
     name: str
     attributes: list[AttributeAssignment]
-    body: Optional[str]
+    body: str | None
 
 
 @dataclass(frozen=True)
@@ -123,7 +128,7 @@ def _render_entry(attributes: list[AttributeAssignment],body: str | None,) -> st
     lines += [
         f"{attr.name}: {json.dumps(attr.value)}"
         for attr in attributes
-        if attr.name != "recorded_at"
+        if attr.name.strip().lower() != "recorded_at"  # recorded_at is ours, not the model's
     ]
     lines.append(f"recorded_at: {json.dumps(_now_iso())}")
     lines.append("---")
@@ -163,6 +168,25 @@ def get_entries(raw_args: str, config: AIClientConfig) -> ToolOutcome:
                 entries.append({"name": child.stem})
 
     return _ok(entries)
+
+
+def get_entry_details(raw_args: str, config: AIClientConfig) -> ToolOutcome:
+    args = GetEntryDetailsArgs.model_validate_json(raw_args or "{}")
+
+    hierarchy = _safe_segment(args.hierarchy)
+    entry_name = _safe_segment(args.entry_name.removesuffix(".md"))
+    if hierarchy is None or entry_name is None:
+        return _fail({"error": "invalid hierarchy or entry name"})
+
+    entry_path = config.data_dir / hierarchy / f"{entry_name}.md"
+    if not entry_path.is_file():
+        return _fail(
+            {"hierarchy": hierarchy, "entry_name": entry_name, "found": False,
+             "error": "entry does not exist"}
+        )
+
+    content = entry_path.read_text(encoding="utf-8")
+    return _ok({"hierarchy": hierarchy, "entry_name": entry_name, "content": content})
 
 
 def create_entry(raw_args: str, config: AIClientConfig) -> ToolOutcome:
@@ -224,6 +248,15 @@ TOOLS_REGISTER: dict[str, _Tool] = {
         description="Use this tool to retrieve all entries in a given hierarchy.",
         args_type=GetEntriesArgs,
         handler=get_entries
+    ),
+    "get_entry_details": _Tool(
+        description=(
+            "Retrieve the full Markdown content of a single existing entry, given "
+            "its `hierarchy` and `entry_name`. Use this to read what an entry "
+            "already contains before acting on it."
+        ),
+        args_type=GetEntryDetailsArgs,
+        handler=get_entry_details
     ),
     "create_entry": _Tool(
         description=(
@@ -375,23 +408,22 @@ class AIClient:
         # ends in tool calls we run them, feed the results back, and stream the
         # next turn; a turn with no tool calls is the final answer, so we stop.
         while True:
-            response: Any = None
-            stream: Any = self._client.responses.create(
+            # ``responses.stream`` is the streaming helper: it opens a live SSE
+            # connection and hands back events as the model produces them, so
+            # text can be emitted token-by-token. (``responses.create`` returns a
+            # single buffered ``Response`` — even with ``stream=True`` the
+            # incremental output never surfaces here.)
+            with self._client.responses.stream(
                 model=self._config.model_name,
                 input=context,
                 tools=AI_TOOLS,
-                stream=True,
-            )
-            for event in stream:
-                # Emit text the moment it arrives, rather than buffering the
-                # whole response.
-                if event.type == "response.output_text.delta":
-                    yield TextDelta(text=event.delta)
-                elif event.type == "response.completed":
-                    response = event.response
-
-            if response is None:
-                break
+            ) as stream:
+                for event in stream:
+                    # Emit text the moment it arrives, rather than buffering the
+                    # whole response.
+                    if event.type == "response.output_text.delta":
+                        yield TextDelta(text=event.delta)
+                response: Any = stream.get_final_response()
 
             tool_calls = _extract_tool_calls(response)
 
@@ -399,12 +431,12 @@ class AIClient:
             for tc in tool_calls:
                 print(tc)
             print()
-            
+
             if not tool_calls:
                 break
 
             context.extend(response.output)
-            
+
             for tc in tool_calls:
                 try:
                     parsed_args = json.loads(tc.arguments)
